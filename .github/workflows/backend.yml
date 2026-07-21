@@ -56,13 +56,53 @@ jobs:
     runs-on: ubuntu-latest
     needs: [docker]
     steps:
-      - name: Trigger Integration Tests
+      - name: Parse dependency and dispatch
         run: |
+          FRONTEND_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/frontend-lab:latest"
+          BACKEND_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          UPSTREAMS=""
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            UPSTREAMS="[{\"repo\":\"${{ github.repository }}\",\"sha\":\"${{ github.sha }}\"}]"
+          else
+            PR_URL="repos/${{ github.repository }}/pulls/${{ github.event.number }}"
+            PR_BODY=$(gh api "$PR_URL" --jq '.body' 2>/dev/null || echo "")
+            DEP=$(echo "$PR_BODY" | grep -E '^cross-repo-dependency:' | sed 's/^cross-repo-dependency: *//' | head -1)
+
+            if [ -n "$DEP" ]; then
+              DEP_REPO=$(echo "$DEP" | cut -d'/' -f1-2)
+              DEP_PR=$(echo "$DEP" | cut -d'/' -f3)
+              DEP_SHA=$(gh api "repos/$DEP_REPO/pulls/$DEP_PR" --jq '.head.sha' 2>/dev/null || echo "")
+
+              if [ -n "$DEP_SHA" ]; then
+                HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                  -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+                  "https://ghcr.io/v2/$DEP_REPO/manifests/pr-$DEP_PR")
+
+                if [ "$HTTP_CODE" = "200" ]; then
+                  echo "Cross-repo: testing with $DEP_REPO PR #$DEP_PR"
+                  FRONTEND_TAG="ghcr.io/$DEP_REPO:pr-$DEP_PR"
+                  PR_SHA="${{ github.event.pull_request.head.sha }}"
+                  UPSTREAMS="[{\"repo\":\"${{ github.repository }}\",\"sha\":\"$PR_SHA\"},{\"repo\":\"$DEP_REPO\",\"sha\":\"$DEP_SHA\"}]"
+                else
+                  echo "Dependency $DEP_REPO PR #$DEP_PR image not ready yet."
+                  echo "Push another commit when it is ready."
+                  exit 0
+                fi
+              else
+                echo "Could not resolve dependency: $DEP"
+                exit 0
+              fi
+            else
+              PR_SHA="${{ github.event.pull_request.head.sha }}"
+              UPSTREAMS="[{\"repo\":\"${{ github.repository }}\",\"sha\":\"$PR_SHA\"}]"
+            fi
+          fi
+
           gh api repos/${{ github.repository_owner }}/e2e-flowts-lab/dispatches \
             -f event_type=integration-tests \
-            -f "client_payload[frontend_image]=${{ env.REGISTRY }}/${{ github.repository_owner }}/frontend-lab:latest" \
-            -f "client_payload[backend_image]=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
-            -f "client_payload[upstream_repo]=${{ github.repository }}" \
-            -f "client_payload[upstream_sha]=${{ github.event.pull_request.head.sha || github.sha }}"
+            -f "client_payload[frontend_image]=$FRONTEND_TAG" \
+            -f "client_payload[backend_image]=$BACKEND_TAG" \
+            -f "client_payload[upstreams]=$UPSTREAMS"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
