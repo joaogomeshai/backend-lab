@@ -15,6 +15,12 @@ export async function chat(
     return reply.status(400).send({ error: "question is required" });
   }
 
-  const answer = await askQuestion(question.trim());
-  return reply.send({ answer });
+  try {
+    const answer = await askQuestion(question.trim());
+    return reply.send({ answer });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    request.log.error("Chat error:", message);
+    return reply.status(500).send({ error: "Failed to process question" });
+  }
 }
