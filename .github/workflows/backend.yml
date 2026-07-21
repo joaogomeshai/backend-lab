@@ -58,7 +58,7 @@ jobs:
         run: |
           gh api repos/${{ github.repository_owner }}/e2e-flowts-lab/dispatches \
             -f event_type=integration-tests \
-            -f client_payload[frontend_image]=${{ env.REGISTRY }}/${{ github.repository_owner }}/frontend-lab:${{ github.sha }} \
+            -f client_payload[frontend_image]=${{ env.REGISTRY }}/${{ github.repository_owner }}/frontend-lab:latest \
             -f client_payload[backend_image]=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
