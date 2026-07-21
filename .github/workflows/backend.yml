@@ -61,4 +61,4 @@ jobs:
             -f client_payload[frontend_image]=${{ env.REGISTRY }}/${{ github.repository_owner }}/frontend-lab:${{ github.sha }} \
             -f client_payload[backend_image]=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
