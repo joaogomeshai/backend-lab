@@ -99,11 +99,18 @@ jobs:
                   UPSTREAMS="[{\"repo\":\"${{ github.repository }}\",\"sha\":\"$PR_SHA\"},{\"repo\":\"$DEP_REPO\",\"sha\":\"$DEP_SHA\"}]"
                 else
                   echo "Dependency $DEP_REPO PR #$DEP_PR image not ready yet."
-                  echo "Push another commit when it is ready."
+                  gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+                    -f state=pending \
+                    -f context=e2e/integration \
+                    -f "description=Waiting for dependency: $DEP"
                   exit 0
                 fi
               else
                 echo "Could not resolve dependency: $DEP"
+                gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+                  -f state=pending \
+                  -f context=e2e/integration \
+                  -f "description=Waiting for dependency: $DEP"
                 exit 0
               fi
             else
