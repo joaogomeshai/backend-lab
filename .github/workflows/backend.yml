@@ -90,8 +90,10 @@ jobs:
               DEP_SHA=$(gh api "repos/$DEP_REPO/pulls/$DEP_PR" --jq '.head.sha' 2>/dev/null || echo "")
 
               if [ -n "$DEP_SHA" ]; then
+                GHCR_TOKEN=$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:$DEP_REPO:pull" \
+                  -u "oauth2:${{ secrets.GH_PAT }}" | jq -r '.token')
                 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-                  -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+                  -H "Authorization: Bearer $GHCR_TOKEN" \
                   "https://ghcr.io/v2/$DEP_REPO/manifests/pr-$DEP_PR")
 
                 if [ "$HTTP_CODE" = "200" ]; then
