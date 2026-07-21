@@ -1,7 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { articleRoutes } from "./routes/articleRoutes";
-import { chatRoutes } from "./routes/chatRoutes";
 
 const app = Fastify({ logger: true });
 
@@ -9,7 +8,6 @@ async function start() {
   await app.register(cors, { origin: "*" });
 
   await app.register(articleRoutes);
-  await app.register(chatRoutes);
 
   const port = parseInt(process.env.PORT || "3001", 10);
   const host = process.env.HOST || "0.0.0.0";
