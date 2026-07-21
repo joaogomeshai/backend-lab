@@ -77,7 +77,7 @@ The frontend or backend pipeline can trigger a workflow in another repository us
   run: |
     gh api repos/:owner/:repo/dispatches \\
       -f event_type=integration-tests \\
-      -f client_payload[image_tag]=${{ github.sha }}
+      -f client_payload[image_tag]=\${{ github.sha }}
 \`\`\`
 
 **Reusable Workflows**
@@ -88,7 +88,7 @@ jobs:
   call-workflow:
     uses: owner/common/.github/workflows/docker-build.yml@main
     with:
-      image_tag: ${{ github.sha }}
+      image_tag: \${{ github.sha }}
 \`\`\`
 
 **Workflow Dispatch**
