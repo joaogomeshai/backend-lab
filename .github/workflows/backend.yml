@@ -63,7 +63,9 @@ jobs:
           UPSTREAMS=""
 
           if [ "${{ github.event_name }}" = "push" ]; then
-            UPSTREAMS="[{\"repo\":\"${{ github.repository }}\",\"sha\":\"${{ github.sha }}\"}]"
+            echo "Push to main: image pushed, E2E already validated on PR"
+            echo "Skipping dispatch to avoid testing against stale images"
+            exit 0
           else
             PR_URL="repos/${{ github.repository }}/pulls/${{ github.event.number }}"
             PR_BODY=$(gh api "$PR_URL" --jq '.body' 2>/dev/null || echo "")
