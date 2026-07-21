@@ -1,0 +1,48 @@
+# Backend Pipeline
+# This file would be placed at backend/.gitlab-ci.yml
+
+image: node:20-alpine
+
+variables:
+  REGISTRY: $CI_REGISTRY
+  IMAGE_TAG: $CI_COMMIT_SHA
+
+stages:
+  - lint
+  - test
+  - docker
+  - trigger
+
+lint:
+  stage: lint
+  script:
+    - npm ci
+    - npm run lint
+
+test:
+  stage: test
+  script:
+    - npm ci
+    - npm test
+
+docker:
+  stage: docker
+  image: docker:27
+  services:
+    - docker:27-dind
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build -t $REGISTRY/$CI_PROJECT_PATH/backend:$IMAGE_TAG .
+    - docker tag $REGISTRY/$CI_PROJECT_PATH/backend:$IMAGE_TAG $REGISTRY/$CI_PROJECT_PATH/backend:latest
+    - docker push $REGISTRY/$CI_PROJECT_PATH/backend:$IMAGE_TAG
+    - docker push $REGISTRY/$CI_PROJECT_PATH/backend:latest
+
+trigger-integration:
+  stage: trigger
+  trigger:
+    project: myorg/e2e-tests
+    branch: main
+    strategy: depend
+  variables:
+    FRONTEND_IMAGE: $REGISTRY/$CI_PROJECT_PATH/frontend:$IMAGE_TAG
+    BACKEND_IMAGE: $REGISTRY/$CI_PROJECT_PATH/backend:$IMAGE_TAG
