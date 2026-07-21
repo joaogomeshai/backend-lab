@@ -72,6 +72,19 @@ jobs:
             if [ -n "$DEP" ]; then
               DEP_REPO=$(echo "$DEP" | cut -d'/' -f1-2)
               DEP_PR=$(echo "$DEP" | cut -d'/' -f3)
+              DEP_COUNT=$(echo "$DEP" | awk -F'/' '{print NF}')
+              if [ "$DEP_COUNT" -ne 3 ] || [ -z "$DEP_REPO" ] || [ -z "$DEP_PR" ]; then
+                echo "Invalid dependency format: $DEP (expected: owner/repo/PR-number)"
+                echo "Treating as no dependency and dispatching normally."
+                DEP=""
+              elif [ -z "$(echo "$DEP_PR" | grep -E '^[0-9]+$')" ]; then
+                echo "Invalid PR number in dependency: $DEP"
+                echo "Treating as no dependency and dispatching normally."
+                DEP=""
+              fi
+            fi
+
+            if [ -n "$DEP" ]; then
               DEP_SHA=$(gh api "repos/$DEP_REPO/pulls/$DEP_PR" --jq '.head.sha' 2>/dev/null || echo "")
 
               if [ -n "$DEP_SHA" ]; then
