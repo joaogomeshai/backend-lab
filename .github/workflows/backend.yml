@@ -71,6 +71,15 @@ jobs:
             PR_BODY=$(gh api "$PR_URL" --jq '.body' 2>/dev/null || echo "")
             DEP=$(echo "$PR_BODY" | grep -E '^cross-repo-dependency:' | sed 's/^cross-repo-dependency: *//' | head -1)
 
+            if [ "$DEP" = "not_trigger" ]; then
+              echo "not_trigger: setting pending — waiting for dependent PR to dispatch E2E"
+              gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+                -f state=pending \
+                -f context=e2e/integration \
+                -f "description=Waiting for dependent PR to trigger E2E"
+              exit 0
+            fi
+
             if [ -n "$DEP" ]; then
               DEP_REPO=$(echo "$DEP" | cut -d'/' -f1-2)
               DEP_PR=$(echo "$DEP" | cut -d'/' -f3)
