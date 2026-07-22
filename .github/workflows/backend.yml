@@ -5,14 +5,17 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  repository_dispatch:
+    types: [cross-repo-wakeup]
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  EXTRA_TAG: ${{ github.event_name == 'push' && 'latest' || format('pr-{0}', github.event.number) }}
+  EXTRA_TAG: ${{ github.event_name == 'push' && 'latest' || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || '') }}
 
 jobs:
   lint:
+    if: github.event_name != 'repository_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +26,7 @@ jobs:
       - run: npm run lint
 
   test:
+    if: github.event_name != 'repository_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +37,7 @@ jobs:
       - run: npm test
 
   docker:
+    if: github.event_name != 'repository_dispatch'
     runs-on: ubuntu-latest
     needs: [lint, test]
     steps:
@@ -54,72 +59,158 @@ jobs:
 
   trigger-integration:
     runs-on: ubuntu-latest
+    if: always()
     needs: [docker]
     steps:
       - name: Parse dependency and dispatch
         run: |
-          FRONTEND_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/frontend-lab:latest"
-          BACKEND_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          UPSTREAMS=""
-
+          ##############################
+          # PUSH TO MAIN — skip dispatch
+          ##############################
           if [ "${{ github.event_name }}" = "push" ]; then
-            echo "Push to main: image pushed, E2E already validated on PR"
-            echo "Skipping dispatch to avoid testing against stale images"
+            echo "Push to main: E2E already validated on PR"
             exit 0
-          else
-            PR_URL="repos/${{ github.repository }}/pulls/${{ github.event.number }}"
-            PR_BODY=$(gh api "$PR_URL" --jq '.body' 2>/dev/null || echo "")
+          fi
+
+          ###############################################
+          # REPOSITORY_DISPATCH — wakeup from passive PR
+          ###############################################
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            PR_NUM="${{ github.event.client_payload.pr_number }}"
+            PR_SHA="${{ github.event.client_payload.pr_head_sha }}"
+            PASSIVE_REPO="${{ github.event.client_payload.passive_repo }}"
+            PASSIVE_SHA="${{ github.event.client_payload.passive_sha }}"
+
+            echo "Wakeup received from $PASSIVE_REPO — re-checking dependency for PR #$PR_NUM"
+
+            PR_BODY=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUM" --jq '.body')
             DEP=$(echo "$PR_BODY" | grep -E '^cross-repo-dependency:' | sed 's/^cross-repo-dependency: *//' | head -1)
 
-            if [ -n "$DEP" ]; then
-              DEP_REPO=$(echo "$DEP" | cut -d'/' -f1-2)
-              DEP_PR=$(echo "$DEP" | cut -d'/' -f3)
-              DEP_COUNT=$(echo "$DEP" | awk -F'/' '{print NF}')
-              if [ "$DEP_COUNT" -ne 3 ] || [ -z "$DEP_REPO" ] || [ -z "$DEP_PR" ]; then
-                echo "Invalid dependency format: $DEP (expected: owner/repo/PR-number)"
-                echo "Treating as no dependency and dispatching normally."
-                DEP=""
-              elif [ -z "$(echo "$DEP_PR" | grep -E '^[0-9]+$')" ]; then
-                echo "Invalid PR number in dependency: $DEP"
-                echo "Treating as no dependency and dispatching normally."
-                DEP=""
-              fi
+            if [ -z "$DEP" ] || [ "$(echo "$DEP" | awk -F'/' '{print NF}')" -ne 3 ]; then
+              echo "No valid dependency — nothing to do"
+              exit 0
             fi
 
-            if [ -n "$DEP" ]; then
-              DEP_SHA=$(gh api "repos/$DEP_REPO/pulls/$DEP_PR" --jq '.head.sha' 2>/dev/null || echo "")
+            DEP_REPO=$(echo "$DEP" | cut -d'/' -f1-2)
+            DEP_PR=$(echo "$DEP" | cut -d'/' -f3)
 
-              if [ -n "$DEP_SHA" ]; then
-                HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-                  -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
-                  "https://ghcr.io/v2/$DEP_REPO/manifests/pr-$DEP_PR")
+            GHCR_TOKEN=$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:$DEP_REPO:pull" \
+              -u "oauth2:${{ secrets.GH_PAT }}" | jq -r '.token')
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $GHCR_TOKEN" \
+              "https://ghcr.io/v2/$DEP_REPO/manifests/pr-$DEP_PR")
 
-                if [ "$HTTP_CODE" = "200" ]; then
-                  echo "Cross-repo: testing with $DEP_REPO PR #$DEP_PR"
-                  FRONTEND_TAG="ghcr.io/$DEP_REPO:pr-$DEP_PR"
-                  PR_SHA="${{ github.event.pull_request.head.sha }}"
-                  UPSTREAMS="[{\"repo\":\"${{ github.repository }}\",\"sha\":\"$PR_SHA\"},{\"repo\":\"$DEP_REPO\",\"sha\":\"$DEP_SHA\"}]"
-                else
-                  echo "Dependency $DEP_REPO PR #$DEP_PR image not ready yet."
-                  gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
-                    -f state=pending \
-                    -f context=e2e/integration \
-                    -f "description=Waiting for dependency: $DEP"
-                  exit 0
-                fi
-              else
-                echo "Could not resolve dependency: $DEP"
-                gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
-                  -f state=pending \
-                  -f context=e2e/integration \
-                  -f "description=Waiting for dependency: $DEP"
-                exit 0
-              fi
-            else
-              PR_SHA="${{ github.event.pull_request.head.sha }}"
-              UPSTREAMS="[{\"repo\":\"${{ github.repository }}\",\"sha\":\"$PR_SHA\"}]"
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "Dependency PR #$DEP_PR image not ready yet — nothing to do"
+              exit 0
+            fi
+
+            echo "Dependency ready — dispatching E2E with $PASSIVE_REPO"
+            FRONTEND_TAG="ghcr.io/$DEP_REPO:pr-$DEP_PR"
+            BACKEND_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:pr-$PR_NUM"
+            UPSTREAMS="[{\"repo\":\"${{ github.repository }}\",\"sha\":\"$PR_SHA\"},{\"repo\":\"$PASSIVE_REPO\",\"sha\":\"$PASSIVE_SHA\"}]"
+
+            gh api repos/${{ github.repository_owner }}/e2e-flowts-lab/dispatches \
+              -f event_type=integration-tests \
+              -f "client_payload[frontend_image]=$FRONTEND_TAG" \
+              -f "client_payload[backend_image]=$BACKEND_TAG" \
+              -f "client_payload[upstreams]=$UPSTREAMS"
+            exit 0
+          fi
+
+          ##############################
+          # PULL REQUEST — default flow
+          ##############################
+          PR_URL="repos/${{ github.repository }}/pulls/${{ github.event.number }}"
+          PR_BODY=$(gh api "$PR_URL" --jq '.body' 2>/dev/null || echo "")
+          DEP=$(echo "$PR_BODY" | grep -E '^cross-repo-dependency:' | sed 's/^cross-repo-dependency: *//' | head -1)
+
+          # wait_for: passive — wakeup the active PR
+          if [[ "$DEP" = wait_for:* ]]; then
+            WAIT_TARGET="${DEP#wait_for:}"
+            WAIT_REPO=$(echo "$WAIT_TARGET" | cut -d'/' -f1-2)
+            WAIT_PR=$(echo "$WAIT_TARGET" | cut -d'/' -f3)
+
+            echo "wait_for: $WAIT_TARGET — setting pending and sending wakeup"
+            gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+              -f state=pending \
+              -f context=e2e/integration \
+              -f "description=Waiting for $WAIT_TARGET to trigger E2E"
+
+            WAIT_SHA=$(gh api "repos/$WAIT_REPO/pulls/$WAIT_PR" --jq '.head.sha' 2>/dev/null || echo "")
+            if [ -n "$WAIT_SHA" ]; then
+              gh api repos/$WAIT_REPO/dispatches \
+                -f event_type=cross-repo-wakeup \
+                -f "client_payload[pr_number]=$WAIT_PR" \
+                -f "client_payload[pr_head_sha]=$WAIT_SHA" \
+                -f "client_payload[passive_repo]=${{ github.repository }}" \
+                -f "client_payload[passive_sha]=${{ github.event.pull_request.head.sha }}"
+              echo "Wakeup sent to $WAIT_REPO PR #$WAIT_PR"
+            fi
+            exit 0
+          fi
+
+          # Validate dependency format
+          if [ -n "$DEP" ]; then
+            DEP_REPO=$(echo "$DEP" | cut -d'/' -f1-2)
+            DEP_PR=$(echo "$DEP" | cut -d'/' -f3)
+            DEP_COUNT=$(echo "$DEP" | awk -F'/' '{print NF}')
+            if [ "$DEP_COUNT" -ne 3 ] || [ -z "$DEP_REPO" ] || [ -z "$DEP_PR" ]; then
+              echo "Invalid dependency format: $DEP — dispatching normally"
+              DEP=""
+            elif [ -z "$(echo "$DEP_PR" | grep -E '^[0-9]+$')" ]; then
+              echo "Invalid PR number: $DEP — dispatching normally"
+              DEP=""
             fi
           fi
+
+          # No dependency — single upstream dispatch
+          if [ -z "$DEP" ]; then
+            PR_SHA="${{ github.event.pull_request.head.sha }}"
+            UPSTREAMS="[{\"repo\":\"${{ github.repository }}\",\"sha\":\"$PR_SHA\"}]"
+            FRONTEND_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/frontend-lab:latest"
+            BACKEND_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+            gh api repos/${{ github.repository_owner }}/e2e-flowts-lab/dispatches \
+              -f event_type=integration-tests \
+              -f "client_payload[frontend_image]=$FRONTEND_TAG" \
+              -f "client_payload[backend_image]=$BACKEND_TAG" \
+              -f "client_payload[upstreams]=$UPSTREAMS"
+            exit 0
+          fi
+
+          # Active dependency — check image and dispatch once
+          DEP_SHA=$(gh api "repos/$DEP_REPO/pulls/$DEP_PR" --jq '.head.sha' 2>/dev/null || echo "")
+
+          if [ -z "$DEP_SHA" ]; then
+            echo "Could not resolve dependency: $DEP"
+            gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+              -f state=pending \
+              -f context=e2e/integration \
+              -f "description=Waiting for dependency: $DEP"
+            exit 0
+          fi
+
+          GHCR_TOKEN=$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:$DEP_REPO:pull" \
+            -u "oauth2:${{ secrets.GH_PAT }}" | jq -r '.token')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GHCR_TOKEN" \
+            "https://ghcr.io/v2/$DEP_REPO/manifests/pr-$DEP_PR")
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Dependency $DEP_REPO PR #$DEP_PR image not ready yet"
+            gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+              -f state=pending \
+              -f context=e2e/integration \
+              -f "description=Waiting for dependency: $DEP"
+            exit 0
+          fi
+
+          echo "Cross-repo: testing with $DEP_REPO PR #$DEP_PR"
+          PR_SHA="${{ github.event.pull_request.head.sha }}"
+          FRONTEND_TAG="ghcr.io/$DEP_REPO:pr-$DEP_PR"
+          BACKEND_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          UPSTREAMS="[{\"repo\":\"${{ github.repository }}\",\"sha\":\"$PR_SHA\"},{\"repo\":\"$DEP_REPO\",\"sha\":\"$DEP_SHA\"}]"
 
           gh api repos/${{ github.repository_owner }}/e2e-flowts-lab/dispatches \
             -f event_type=integration-tests \

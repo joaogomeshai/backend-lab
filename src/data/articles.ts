@@ -345,4 +345,19 @@ Don't wait until the end to test integration. Run integration tests as soon as c
 Version your CI/CD configuration alongside your application code. Review pipeline changes like code changes.`,
     topic: "Analysis",
   },
+  {
+    id: 14,
+    slug: "cross-repo-dependency-test",
+    title: "Cross-Repo Dependency Test",
+    content: `This article was added to test cross-repo dependency coordination.
+
+When frontend and backend PRs depend on each other, the multi-project pipeline must:
+1. Recognize the dependency declaration in the PR body
+2. Check if the dependency's Docker image is available
+3. If ready: run E2E with both PR images and report status to both PRs
+4. If not ready: set a pending status on the current PR and stop
+
+This ensures cross-repo changes are validated together before either PR can merge.`,
+    topic: "Testing",
+  },
 ];
