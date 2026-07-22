@@ -91,8 +91,21 @@ jobs:
               exit 0
             fi
 
-            DEP_REPO=$(echo "$DEP" | cut -d'/' -f1-2)
-            DEP_PR=$(echo "$DEP" | cut -d'/' -f3)
+            # Resolve branch: in wakeup
+            if echo "$DEP" | grep -qE '^[^/]+/[^/]+/branch:'; then
+              DEP_REPO=$(echo "$DEP" | cut -d'/' -f1-2)
+              DEP_BRANCH=$(echo "$DEP" | sed 's/^[^/]*\/[^/]*\/branch://')
+              DEP_OWNER=$(echo "$DEP_REPO" | cut -d'/' -f1)
+              DEP_PR=$(gh api "repos/$DEP_REPO/pulls?head=$DEP_OWNER:$DEP_BRANCH&state=open" --jq '.[0].number' 2>/dev/null || echo "")
+              if [ -z "$DEP_PR" ] || [ "$DEP_PR" = "null" ]; then
+                echo "Branch dependency not resolvable in wakeup — nothing to do"
+                exit 0
+              fi
+              echo "Resolved branch to PR #$DEP_PR"
+            else
+              DEP_REPO=$(echo "$DEP" | cut -d'/' -f1-2)
+              DEP_PR=$(echo "$DEP" | cut -d'/' -f3)
+            fi
 
             GHCR_TOKEN=$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:$DEP_REPO:pull" \
               -u "oauth2:${{ secrets.GH_PAT }}" | jq -r '.token')
@@ -125,11 +138,33 @@ jobs:
           PR_BODY=$(gh api "$PR_URL" --jq '.body' 2>/dev/null || echo "")
           DEP=$(echo "$PR_BODY" | grep -E '^cross-repo-dependency:' | sed 's/^cross-repo-dependency: *//' | head -1)
 
+          # Resolve branch: format to PR number
+          resolve_branch() {
+            local dep="$1"
+            local repo=$(echo "$dep" | cut -d'/' -f1-2)
+            local branch=$(echo "$dep" | sed 's/^[^/]*\/[^/]*\/branch://')
+            local owner=$(echo "$repo" | cut -d'/' -f1)
+            local pr_num=$(gh api "repos/$repo/pulls?head=$owner:$branch&state=open" --jq '.[0].number' 2>/dev/null || echo "")
+            if [ -n "$pr_num" ] && [ "$pr_num" != "null" ]; then
+              echo "$repo/$pr_num"
+            fi
+          }
+
           # wait_for: passive — wakeup the active PR
           if [[ "$DEP" = wait_for:* ]]; then
             WAIT_TARGET="${DEP#wait_for:}"
             WAIT_REPO=$(echo "$WAIT_TARGET" | cut -d'/' -f1-2)
             WAIT_PR=$(echo "$WAIT_TARGET" | cut -d'/' -f3)
+
+            # If wait_for target uses branch: format, resolve it
+            if echo "$WAIT_TARGET" | grep -qE '^[^/]+/[^/]+/branch:'; then
+              RESOLVED=$(resolve_branch "$WAIT_TARGET")
+              if [ -n "$RESOLVED" ]; then
+                WAIT_REPO=$(echo "$RESOLVED" | cut -d'/' -f1-2)
+                WAIT_PR=$(echo "$RESOLVED" | cut -d'/' -f3)
+                echo "Resolved wait_for branch to $WAIT_REPO PR #$WAIT_PR"
+              fi
+            fi
 
             echo "wait_for: $WAIT_TARGET — setting pending and sending wakeup"
             gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
@@ -148,6 +183,22 @@ jobs:
               echo "Wakeup sent to $WAIT_REPO PR #$WAIT_PR"
             fi
             exit 0
+          fi
+
+          # Resolve branch: format in active dependency
+          if echo "$DEP" | grep -qE '^[^/]+/[^/]+/branch:'; then
+            RESOLVED=$(resolve_branch "$DEP")
+            if [ -n "$RESOLVED" ]; then
+              echo "Resolved branch dependency to $RESOLVED"
+              DEP="$RESOLVED"
+            else
+              echo "Branch dependency not yet resolvable — no PR found for this branch"
+              gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+                -f state=pending \
+                -f context=e2e/integration \
+                -f "description=Waiting for dependency branch PR to open"
+              exit 0
+            fi
           fi
 
           # Validate dependency format
