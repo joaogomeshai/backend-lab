@@ -346,6 +346,14 @@ Version your CI/CD configuration alongside your application code. Review pipelin
     topic: "Analysis",
   },
   {
+    id: 15,
+    slug: "demo-parallel-flow",
+    title: "Demo Parallel Flow",
+    content: `This article demonstrates a coordinated frontend+backend change.
+The frontend PR waits for the backend PR image before running E2E.`,
+    topic: "Testing",
+  },
+  {
     id: 14,
     slug: "cross-repo-dependency-test",
     title: "Cross-Repo Dependency Test",
