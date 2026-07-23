@@ -161,7 +161,7 @@ jobs:
             local branch=$(echo "$dep" | sed 's/^[^/]*\/[^/]*\/branch://')
             local owner=$(echo "$repo" | cut -d'/' -f1)
             local pr_num=$(gh api "repos/$repo/pulls?head=$owner:$branch" --jq '.[0] | select(.state == "open" and .merged == false) | .number' 2>/dev/null || echo "")
-            if [ -n "$pr_num" ]; then
+            if [[ "$pr_num" =~ ^[0-9]+$ ]]; then
               echo "$repo/$pr_num"
             fi
           }
