@@ -85,6 +85,12 @@ jobs:
 
             PR_BODY=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUM" --jq '.body')
             DEP=$(echo "$PR_BODY" | grep -E '^cross-repo-dependency:' | sed 's/^cross-repo-dependency: *//' | head -1)
+            ROLE=$(printf '%s\n' "$PR_BODY" | sed 's/^[[:space:]]*//' | awk -F': ' '/^role:/{print $2; exit}')
+            DEP_PROJECT=$(printf '%s\n' "$PR_BODY" | sed 's/^[[:space:]]*//' | awk -F': ' '/^dependency_project:/{print $2; exit}')
+            DEP_BRANCH=$(printf '%s\n' "$PR_BODY" | sed 's/^[[:space:]]*//' | awk -F': ' '/^dependency_branch:/{print $2; exit}')
+            if [ "$ROLE" = "active" ] && [ -n "$DEP_PROJECT" ] && [ -n "$DEP_BRANCH" ]; then
+              DEP="$DEP_PROJECT/branch:$DEP_BRANCH"
+            fi
 
             if [ -z "$DEP" ] || [ "$(echo "$DEP" | awk -F'/' '{print NF}')" -ne 3 ]; then
               echo "No valid dependency — nothing to do"
@@ -137,6 +143,16 @@ jobs:
           PR_URL="repos/${{ github.repository }}/pulls/${{ github.event.number }}"
           PR_BODY=$(gh api "$PR_URL" --jq '.body' 2>/dev/null || echo "")
           DEP=$(echo "$PR_BODY" | grep -E '^cross-repo-dependency:' | sed 's/^cross-repo-dependency: *//' | head -1)
+          ROLE=$(printf '%s\n' "$PR_BODY" | sed 's/^[[:space:]]*//' | awk -F': ' '/^role:/{print $2; exit}')
+          DEP_PROJECT=$(printf '%s\n' "$PR_BODY" | sed 's/^[[:space:]]*//' | awk -F': ' '/^dependency_project:/{print $2; exit}')
+          DEP_BRANCH=$(printf '%s\n' "$PR_BODY" | sed 's/^[[:space:]]*//' | awk -F': ' '/^dependency_branch:/{print $2; exit}')
+          COORD_PROJECT=$(printf '%s\n' "$PR_BODY" | sed 's/^[[:space:]]*//' | awk -F': ' '/^coordinator_project:/{print $2; exit}')
+          COORD_BRANCH=$(printf '%s\n' "$PR_BODY" | sed 's/^[[:space:]]*//' | awk -F': ' '/^coordinator_branch:/{print $2; exit}')
+          if [ "$ROLE" = "active" ] && [ -n "$DEP_PROJECT" ] && [ -n "$DEP_BRANCH" ]; then
+            DEP="$DEP_PROJECT/branch:$DEP_BRANCH"
+          elif [ "$ROLE" = "passive" ] && [ -n "$COORD_PROJECT" ] && [ -n "$COORD_BRANCH" ]; then
+            DEP="wait_for:$COORD_PROJECT/branch:$COORD_BRANCH"
+          fi
 
           # Resolve branch: format to PR number
           resolve_branch() {
