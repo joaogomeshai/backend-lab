@@ -72,6 +72,13 @@ jobs:
             exit 0
           fi
 
+          # If E2E status is already final, don't overwrite it
+          E2E_STATUS=$(gh api "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/status" --jq '.statuses[] | select(.context == "e2e/integration") | .state' 2>/dev/null || echo "")
+          if [ "$E2E_STATUS" = "success" ] || [ "$E2E_STATUS" = "failure" ]; then
+            echo "E2E already $E2E_STATUS for this SHA — not overwriting"
+            exit 0
+          fi
+
           ###############################################
           # REPOSITORY_DISPATCH — wakeup from passive PR
           ###############################################
