@@ -200,6 +200,7 @@ jobs:
                 -f "inputs[pr_number]=$WAIT_PR" \
                 -f "inputs[pr_head_sha]=$WAIT_SHA" \
                 -f "inputs[passive_repo]=${{ github.repository }}" \
+                -f "inputs[passive_pr_number]=${{ github.event.number }}" \
                 -f "inputs[passive_sha]=${{ github.event.pull_request.head.sha }}"
               echo "Workflow wakeup sent to $WAIT_REPO PR #$WAIT_PR on branch $WAIT_BRANCH"
             fi
