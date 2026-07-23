@@ -171,9 +171,11 @@ jobs:
             WAIT_TARGET="${DEP#wait_for:}"
             WAIT_REPO=$(echo "$WAIT_TARGET" | cut -d'/' -f1-2)
             WAIT_PR=$(echo "$WAIT_TARGET" | cut -d'/' -f3)
+            WAIT_BRANCH=""
 
             # If wait_for target uses branch: format, resolve it
             if echo "$WAIT_TARGET" | grep -qE '^[^/]+/[^/]+/branch:'; then
+              WAIT_BRANCH=$(echo "$WAIT_TARGET" | sed 's/^[^/]*\/[^/]*\/branch://')
               RESOLVED=$(resolve_branch "$WAIT_TARGET")
               if [ -n "$RESOLVED" ]; then
                 WAIT_REPO=$(echo "$RESOLVED" | cut -d'/' -f1-2)
@@ -189,14 +191,17 @@ jobs:
               -f "description=Waiting for $WAIT_TARGET to trigger E2E"
 
             WAIT_SHA=$(gh api "repos/$WAIT_REPO/pulls/$WAIT_PR" --jq '.head.sha' 2>/dev/null || echo "")
+            if [ -z "$WAIT_BRANCH" ]; then
+              WAIT_BRANCH=$(gh api "repos/$WAIT_REPO/pulls/$WAIT_PR" --jq '.head.ref' 2>/dev/null || echo "")
+            fi
             if [ -n "$WAIT_SHA" ]; then
-              gh api repos/$WAIT_REPO/dispatches \
-                -f event_type=cross-repo-wakeup \
-                -f "client_payload[pr_number]=$WAIT_PR" \
-                -f "client_payload[pr_head_sha]=$WAIT_SHA" \
-                -f "client_payload[passive_repo]=${{ github.repository }}" \
-                -f "client_payload[passive_sha]=${{ github.event.pull_request.head.sha }}"
-              echo "Wakeup sent to $WAIT_REPO PR #$WAIT_PR"
+              gh api --method POST "repos/$WAIT_REPO/actions/workflows/frontend.yml/dispatches" \
+                -f "ref=$WAIT_BRANCH" \
+                -f "inputs[pr_number]=$WAIT_PR" \
+                -f "inputs[pr_head_sha]=$WAIT_SHA" \
+                -f "inputs[passive_repo]=${{ github.repository }}" \
+                -f "inputs[passive_sha]=${{ github.event.pull_request.head.sha }}"
+              echo "Workflow wakeup sent to $WAIT_REPO PR #$WAIT_PR on branch $WAIT_BRANCH"
             fi
             exit 0
           fi
