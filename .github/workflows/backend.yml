@@ -141,7 +141,7 @@ jobs:
           # PULL REQUEST — default flow
           ##############################
           PR_URL="repos/${{ github.repository }}/pulls/${{ github.event.number }}"
-          PR_BODY=$(gh api "$PR_URL" --jq '.body' 2>/dev/null || echo "")
+          PR_BODY=$(gh api "$PR_URL" --jq '.body' 2>/dev/null | tr -d '\r' || echo "")
           DEP=$(echo "$PR_BODY" | grep -E '^cross-repo-dependency:' | sed 's/^cross-repo-dependency: *//' | head -1)
           ROLE=$(printf '%s\n' "$PR_BODY" | sed 's/^[[:space:]]*//' | awk -F': ' '/^role:/{print $2; exit}')
           DEP_PROJECT=$(printf '%s\n' "$PR_BODY" | sed 's/^[[:space:]]*//' | awk -F': ' '/^dependency_project:/{print $2; exit}')
